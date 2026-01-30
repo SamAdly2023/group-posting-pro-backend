@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const axios = require('axios');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,6 +18,9 @@ const PAYPAL_API_URL = process.env.NODE_ENV === 'production'
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
+
+// Serve static files from the 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Helper function to get PayPal access token
 async function getPayPalAccessToken() {
@@ -40,11 +44,7 @@ async function getPayPalAccessToken() {
 
 // --- Health Check Endpoint for Render.com ---
 app.get('/', (req, res) => {
-    res.json({
-        status: 'running',
-        message: 'Group Posting Pro Backend Server by Sam Adly',
-        timestamp: new Date().toISOString()
-    });
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 app.get('/health', (req, res) => {
