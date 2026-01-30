@@ -51,24 +51,65 @@ app.get('/health', (req, res) => {
     res.status(200).json({ status: 'healthy' });
 });
 
-// --- API Key & DeepSeek ---
+// --- API Key & AI Proxy ---
 
 // Mimics: https://groupposting.com/wp-json/groupposting/v1/get-api-key
 app.post('/api/get-api-key', (req, res) => {
     console.log('[API Key Request]', req.body);
-    // You can implement your own validation logic here.
-    // For now, we return a success with a placeholder key.
-    // If you have your own DeepSeek key, put it here, or prompt the user to enter it in the UI.
-
-    // In a real scenario, you probably want to use a proxy so the key isn't exposed to the client,
-    // but the original extension architecture asks for the key.
-
+    // Since we are proxying AI requests through this server, we don't need to send the real key to the client.
+    // We send a placeholder so the extension's check passes.
     res.json({
         success: true,
-        api_key: "sk-YOUR_DEEPSEEK_API_KEY", // Replace with actual key or logic
-        expires: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 30) // 30 days
+        api_key: "proxy-mode-enabled",
+        expires: Math.floor(Date.now() / 1000) + (60 * 60 * 24 * 365) // 1 year
     });
 });
+
+// AI Proxy Endpoint (Uses Server-Side Gemini Key)
+app.post('/api/ai/chat/completions', async (req, res) => {
+    try {
+        console.log('[AI Proxy] Request received');
+
+        // Get the key from Render environment variables
+        // User stated they added "API_KEY" or "DEEPSEEK_API_KEY"
+        const SERVER_API_KEY = process.env.API_KEY || process.env.DEEPSEEK_API_KEY;
+
+        if (!SERVER_API_KEY) {
+            console.error('[AI Proxy] Missing API_KEY in server environment');
+            return res.status(500).json({ error: 'Server configuration error: Missing API Key' });
+        }
+
+        // Forward to Gemini via OpenAI compatibility layer
+        // https://ai.google.dev/gemini-api/docs/openai
+        const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+
+        // Override the model to use a Gemini model
+        // The extension sends 'deepseek-chat', we swap it for 'gemini-1.5-flash' (fast & cheap)
+        const requestBody = {
+            ...req.body,
+            model: "gemini-1.5-flash"
+        };
+
+        const response = await axios.post(GEMINI_URL, requestBody, {
+            headers: {
+                'Authorization': `Bearer ${SERVER_API_KEY}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        res.json(response.data);
+
+    } catch (error) {
+        console.error('[AI Proxy Error]', error.message);
+        if (error.response) {
+            console.error('[AI Proxy Error Data]', error.response.data);
+            res.status(error.response.status).json(error.response.data);
+        } else {
+            res.status(500).json({ error: 'Failed to communicate with AI provider' });
+        }
+    }
+});
+
 
 // --- License Verification ---
 
