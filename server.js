@@ -15,12 +15,28 @@ const PAYPAL_API_URL = process.env.NODE_ENV === 'production'
     ? 'https://api.paypal.com'
     : 'https://api.sandbox.paypal.com';
 
+const GHL_WEBHOOK_URL = 'https://services.leadconnectorhq.com/hooks/tbWaBmRj1ai6VJlNz3VY/webhook-trigger/DSFHrUO71Lptpvh4qKMW';
+
 app.use(cors());
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-
-// Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
+
+// Helper: Send Data to GoHighLevel Workflow
+async function sendToGHL(eventType, data) {
+    try {
+        const payload = {
+            event_type: eventType,
+            timestamp: new Date().toISOString(),
+            ...data
+        };
+        console.log(`[GHL Webhook] Sending ${eventType}...`);
+        await axios.post(GHL_WEBHOOK_URL, payload);
+        console.log(`[GHL Webhook] Sent ${eventType} successfully.`);
+    } catch (error) {
+        console.error(`[GHL Webhook Error] Failed to send ${eventType}:`, error.message);
+    }
+}
 
 // Helper function to get PayPal access token
 async function getPayPalAccessToken() {
@@ -49,6 +65,26 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
     res.status(200).json({ status: 'healthy' });
+});
+
+// --- Contact Form Endpoint ---
+app.post('/api/contact', async (req, res) => {
+    try {
+        const { name, email, message } = req.body;
+
+        // Trigger GHL Workflow
+        await sendToGHL('CONTACT_FORM_SUBMISSION', {
+            contact_name: name,
+            contact_email: email,
+            message: message,
+            source: 'landing_page'
+        });
+
+        res.json({ success: true, message: 'Message sent successfully' });
+    } catch (error) {
+        console.error('[Contact Form Error]', error);
+        res.status(500).json({ success: false, error: 'Failed to send message' });
+    }
 });
 
 // --- API Key & AI Proxy ---
@@ -293,36 +329,62 @@ app.post('/api/paypal/cancel-subscription', async (req, res) => {
 });
 
 // Webhook endpoint for PayPal notifications
-app.post('/api/paypal/webhook', (req, res) => {
+app.post('/api/paypal/webhook', async (req, res) => {
     const { event_type, resource } = req.body;
 
     console.log('[PayPal Webhook]', event_type, resource?.id);
+
+    // Extract common user data if available
+    const userData = {
+        subscription_id: resource?.id,
+        plan_id: resource?.plan_id,
+        status: resource?.status,
+        email: resource?.subscriber?.email_address,
+        name: resource?.subscriber?.name?.given_name + ' ' + resource?.subscriber?.name?.surname
+    };
 
     // Log different subscription events
     switch (event_type) {
         case 'BILLING.SUBSCRIPTION.CREATED':
             console.log('✓ Subscription created:', resource.id);
+            await sendToGHL('SUBSCRIPTION_CREATED', userData);
             break;
         case 'BILLING.SUBSCRIPTION.ACTIVATED':
             console.log('✓ Subscription activated:', resource.id);
+            // This is where you'd send the License Key email
+            await sendToGHL('SUBSCRIPTION_ACTIVATED', {
+                ...userData,
+                action: 'SEND_LICENSE_KEY' // Signal to GHL to send the license email
+            });
             break;
         case 'BILLING.SUBSCRIPTION.UPDATED':
             console.log('✓ Subscription updated:', resource.id);
+            await sendToGHL('SUBSCRIPTION_UPDATED', userData);
             break;
         case 'BILLING.SUBSCRIPTION.CANCELLED':
             console.log('✓ Subscription cancelled:', resource.id);
+            await sendToGHL('SUBSCRIPTION_CANCELLED', userData);
             break;
         case 'BILLING.SUBSCRIPTION.SUSPENDED':
             console.log('⚠ Subscription suspended:', resource.id);
+            await sendToGHL('SUBSCRIPTION_SUSPENDED', userData);
             break;
         case 'BILLING.SUBSCRIPTION.EXPIRED':
             console.log('✓ Subscription expired:', resource.id);
+            await sendToGHL('SUBSCRIPTION_EXPIRED', userData);
             break;
         case 'PAYMENT.CAPTURE.COMPLETED':
             console.log('✓ Payment captured:', resource.id);
+            // Optional: Send "Payment Receipt" email
+            await sendToGHL('PAYMENT_SUCCESSFUL', {
+                amount: resource?.amount?.value,
+                currency: resource?.amount?.currency_code,
+                ...userData
+            });
             break;
         case 'PAYMENT.CAPTURE.DENIED':
             console.log('✗ Payment denied:', resource.id);
+            await sendToGHL('PAYMENT_FAILED', userData);
             break;
     }
 
